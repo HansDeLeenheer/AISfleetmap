@@ -17,9 +17,12 @@
   #app{display:flex;height:100vh;overflow:hidden}
   #side{width:340px;flex:0 0 340px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}
   #map{flex:1;background:#08131f}
-  header{padding:14px 16px;border-bottom:1px solid var(--line)}
-  header h1{margin:0;font-size:16px;letter-spacing:.2px}
+  header{padding:14px 16px;border-bottom:1px solid var(--line);position:relative}
+  header h1{margin:0;font-size:16px;letter-spacing:.2px;padding-right:36px}
   header .sub{margin-top:3px;font-size:11px;color:var(--mut)}
+  #toggle{position:absolute;top:11px;right:12px;width:30px;height:30px;padding:0;border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:7px;font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  #toggle:hover{background:var(--line)}
+  #side.collapsed #list,#side.collapsed #live,#side.collapsed footer{display:none}
   #status{display:flex;gap:12px;padding:10px 16px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);flex-wrap:wrap}
   #status b{color:var(--ink)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
@@ -49,13 +52,20 @@
   .pop .g{color:#456;font-size:11px}
   .pop table{font-size:11px;margin-top:4px;border-collapse:collapse}
   .pop td{padding:1px 8px 1px 0}
-  @media(max-width:720px){#side{width:100%;flex-basis:auto;position:absolute;bottom:0;height:46%;z-index:1000;border-right:0;border-top:1px solid var(--line)}#map{height:54%}#app{flex-direction:column}}
+  @media(max-width:720px){
+    #app{flex-direction:column}
+    #map{position:absolute;inset:0;width:100%;height:100%}
+    #side{position:absolute;left:0;right:0;bottom:0;width:100%;flex-basis:auto;height:50%;z-index:1000;border-right:0;border-top:1px solid var(--line);box-shadow:0 -6px 24px rgba(0,0,0,.45)}
+    #side.collapsed{height:auto}
+    #status,footer,details#live{display:none}
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <div id="side">
     <header>
+      <button id="toggle" aria-label="Lijst tonen of verbergen">✕</button>
       <h1>⛵ Tall Ships Antwerpen 2026</h1>
       <div class="sub">Live posities · The Tall Ships Races · 11–14 juli</div>
     </header>
@@ -94,11 +104,35 @@ const state   = {};   // mmsi -> {lat,lon,sog,cog,hdg,t,src}
 
 // ---- map ----
 const map = L.map('map',{zoomControl:true,worldCopyJump:true}).setView([52.5,3.5],6);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
-  attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:18, subdomains:'abcd'
+// Nautical base: Esri World Ocean (bathymetry + blue seas) + labels + OpenSeaMap seamarks.
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',{
+  attribution:'Esri, GEBCO, NOAA', maxZoom:19, maxNativeZoom:13
+}).addTo(map);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',{
+  maxZoom:19, maxNativeZoom:13
+}).addTo(map);
+L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{
+  attribution:'© OpenSeaMap', maxZoom:19, opacity:0.9
 }).addTo(map);
 L.circleMarker([51.229,4.405],{radius:5,color:"#41c7c7",fillColor:"#41c7c7",fillOpacity:1})
   .addTo(map).bindTooltip("Antwerpen");
+
+// Auto-frame the fleet until the user takes control of the map.
+let userMoved=false, programmatic=false;
+function withProg(fn){ programmatic=true; fn(); setTimeout(()=>{programmatic=false;},450); }
+map.on('dragstart zoomstart', ()=>{ if(!programmatic) userMoved=true; });
+function fitFleet(){
+  const pts = Object.values(state).filter(s=>s.lat!=null).map(s=>[s.lat,s.lon]);
+  if(!pts.length) return;
+  const mobile = window.matchMedia('(max-width:720px)').matches;
+  withProg(()=>{
+    if(pts.length===1){ map.setView(pts[0], 11); return; }
+    const b = L.latLngBounds(pts);
+    map.fitBounds(b, mobile
+      ? {paddingTopLeft:[24,24], paddingBottomRight:[24, Math.round(window.innerHeight*0.5)], maxZoom:12}
+      : {padding:[55,60], maxZoom:12});
+  });
+}
 
 function shipIcon(cls, hdg){
   const col = CLSCOL[cls]||"#89a";
@@ -164,7 +198,11 @@ function renderList(){
   document.getElementById('totN').textContent=SHIPS.length;
   listEl.querySelectorAll('.row').forEach(r=>r.onclick=()=>{
     const m=r.dataset.m, st=state[m];
-    if(st&&st.lat!=null){ map.setView([st.lat,st.lon],9,{animate:true}); markers[m]&&markers[m].openPopup(); }
+    if(st&&st.lat!=null){
+      userMoved=true;
+      withProg(()=>map.setView([st.lat,st.lon],12,{animate:true}));
+      markers[m]&&markers[m].openPopup();
+    }
   });
 }
 
@@ -192,6 +230,7 @@ async function loadPositions(){
     const ageEl=document.getElementById('age');
     if(j.generatedAt) ageEl.textContent='bijgewerkt '+fmtAgo(new Date(j.generatedAt).getTime())+' geleden';
   }catch(e){ /* positions.json may not exist yet */ }
+  if(!userMoved) fitFleet();
   renderList();
 }
 
@@ -241,6 +280,12 @@ function connect(){
 document.getElementById('connect').onclick=connect;
 document.getElementById('key').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
 const saved=localStorage.getItem('ais_key'); if(saved){ document.getElementById('key').value=saved; document.getElementById('live').open=true; }
+
+// Collapse / expand the fleet panel (title-bar button, works in the mobile layout).
+const sideEl=document.getElementById('side'), toggleBtn=document.getElementById('toggle');
+function syncToggle(){ toggleBtn.textContent = sideEl.classList.contains('collapsed') ? '☰' : '✕'; }
+toggleBtn.onclick=()=>{ sideEl.classList.toggle('collapsed'); syncToggle(); setTimeout(()=>map.invalidateSize(),260); };
+syncToggle();
 
 // ---- boot ----
 (async ()=>{
