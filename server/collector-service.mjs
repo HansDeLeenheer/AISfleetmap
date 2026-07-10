@@ -14,8 +14,15 @@ const PORT = process.env.PORT || 8080;
 const BBOX = [[[40.0, -15.0], [71.0, 31.0]]]; // Biscay -> Norway/Baltic
 if (!KEY) { console.error('Missing AISSTREAM_API_KEY'); process.exit(1); }
 
-// Fleet MMSIs from the repo's ships.json (../ships.json relative to this file).
-const fleet = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../ships.json'), 'utf8'));
+// Fleet MMSIs: prefer the repo's ships.json (../ships.json), else fetch the public copy, so
+// the service works regardless of how the host packages the build.
+let fleet;
+try {
+  fleet = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../ships.json'), 'utf8'));
+} catch {
+  const r = await fetch('https://hansdeleenheer.github.io/AISfleetmap/ships.json');
+  fleet = await r.json();
+}
 const mmsis = fleet.ships.map(s => String(s.mmsi)).filter(Boolean);
 const nameByMMSI = Object.fromEntries(fleet.ships.map(s => [String(s.mmsi), s.name]));
 
