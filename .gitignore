@@ -1,0 +1,6 @@
+node_modules/
+collector/node_modules/
+.DS_Store
+
+# Local working notes / context — never publish
+CLAUDE.md

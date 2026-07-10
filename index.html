@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tall Ships Antwerpen 2026 · live kaart</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root{
+    --bg:#0b1a2a; --panel:#0f2436; --panel2:#13314a; --line:#20476b;
+    --ink:#e8f1f9; --mut:#8fb0cc; --accent:#41c7c7;
+    --live:#3ddc84; --stale:#e0b341; --off:#5b7793;
+    --A:#e0552b; --B:#3a86ff; --C:#8b5cf6; --D:#2dd4bf;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  #app{display:flex;height:100vh;overflow:hidden}
+  #side{width:340px;flex:0 0 340px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column}
+  #map{flex:1;background:#08131f}
+  header{padding:14px 16px;border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:16px;letter-spacing:.2px}
+  header .sub{margin-top:3px;font-size:11px;color:var(--mut)}
+  #status{display:flex;gap:12px;padding:10px 16px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  #status b{color:var(--ink)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  details#live{border-bottom:1px solid var(--line)}
+  details#live summary{padding:9px 16px;font-size:11px;color:var(--mut);cursor:pointer;list-style:none}
+  details#live summary::-webkit-details-marker{display:none}
+  details#live summary::before{content:"▸ ";color:var(--accent)}
+  details#live[open] summary::before{content:"▾ "}
+  #keybar{padding:0 16px 12px;display:flex;gap:6px}
+  #keybar input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:7px 9px;font-size:12px}
+  #keybar button{background:var(--accent);border:0;color:#04222b;font-weight:600;border-radius:6px;padding:7px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+  #list{flex:1;overflow-y:auto}
+  .row{display:flex;align-items:center;gap:9px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer}
+  .row:hover{background:var(--panel2)}
+  .row .cls{flex:0 0 20px;height:20px;border-radius:5px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;color:#fff}
+  .row .nm{flex:1;min-width:0}
+  .row .nm .n{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .nm .m{font-size:10.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .st{flex:0 0 auto;font-size:10px;color:var(--mut);text-align:right}
+  .row .st .sd{display:inline-block;width:7px;height:7px;border-radius:50%;margin-left:5px}
+  footer{padding:9px 16px;font-size:10px;color:var(--off);border-top:1px solid var(--line);line-height:1.5}
+  footer a{color:var(--mut)}
+  .ship-marker .hull{filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
+  .leaflet-tooltip.ship-lab{background:rgba(9,20,32,.82);border:0;color:#dff;font-size:11px;font-weight:600;box-shadow:none;padding:1px 5px}
+  .leaflet-tooltip.ship-lab::before{display:none}
+  .pop b{font-size:13px}
+  .pop .g{color:#456;font-size:11px}
+  .pop table{font-size:11px;margin-top:4px;border-collapse:collapse}
+  .pop td{padding:1px 8px 1px 0}
+  @media(max-width:720px){#side{width:100%;flex-basis:auto;position:absolute;bottom:0;height:46%;z-index:1000;border-right:0;border-top:1px solid var(--line)}#map{height:54%}#app{flex-direction:column}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <header>
+      <h1>⛵ Tall Ships Antwerpen 2026</h1>
+      <div class="sub">Live posities · The Tall Ships Races · 11–14 juli</div>
+    </header>
+    <div id="status">
+      <span><span class="dot" id="cdot" style="background:var(--off)"></span><span id="cstate">opgeslagen posities</span></span>
+      <span><b id="liveN">0</b> gelokaliseerd</span>
+      <span><b id="totN">0</b> vloot</span>
+      <span id="age"></span>
+    </div>
+    <details id="live">
+      <summary>Live meevolgen met je eigen aisstream-sleutel</summary>
+      <div id="keybar">
+        <input id="key" type="text" placeholder="aisstream.io API-sleutel" autocomplete="off">
+        <button id="connect">Verbind</button>
+      </div>
+    </details>
+    <div id="list"></div>
+    <footer>
+      Posities via <a href="https://aisstream.io" target="_blank">aisstream.io</a> (gratis AIS, enkel walontvangers). Schepen zonder AIS of buiten bereik verschijnen niet. Bron vloot: <a href="https://tallships.antwerpen.be" target="_blank">tallships.antwerpen.be</a>.
+    </footer>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const CLSCOL = {A:"#e0552b",B:"#3a86ff",C:"#8b5cf6",D:"#2dd4bf"};
+const FLAG = {
+  "Noorwegen":"🇳🇴","Duitsland":"🇩🇪","Polen":"🇵🇱","Denemarken":"🇩🇰","Nederland":"🇳🇱",
+  "Italië":"🇮🇹","Verenigd Koninkrijk":"🇬🇧","België":"🇧🇪","Frankrijk":"🇫🇷","Spanje":"🇪🇸",
+  "Portugal":"🇵🇹","Letland":"🇱🇻","Oostenrijk":"🇦🇹"
+};
+let SHIPS = [], byMMSI = {};
+const markers = {};   // mmsi -> L.marker
+const state   = {};   // mmsi -> {lat,lon,sog,cog,hdg,t,src}
+
+// ---- map ----
+const map = L.map('map',{zoomControl:true,worldCopyJump:true}).setView([52.5,3.5],6);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap &copy; CARTO', maxZoom:18, subdomains:'abcd'
+}).addTo(map);
+L.circleMarker([51.229,4.405],{radius:5,color:"#41c7c7",fillColor:"#41c7c7",fillOpacity:1})
+  .addTo(map).bindTooltip("Antwerpen");
+
+function shipIcon(cls, hdg){
+  const col = CLSCOL[cls]||"#89a";
+  const rot = (hdg==null||hdg===511)?0:hdg;
+  return L.divIcon({
+    className:'ship-marker', iconSize:[22,22], iconAnchor:[11,11],
+    html:`<svg class="hull" width="22" height="22" viewBox="0 0 22 22" style="transform:rotate(${rot}deg)">
+       <path d="M11 1 L16 15 Q11 19 6 15 Z" fill="${col}" stroke="#fff" stroke-width="1.2"/></svg>`
+  });
+}
+function fmtAgo(t){
+  if(!t) return "";
+  const s = Math.round((Date.now()-t)/1000);
+  if(s<60) return s+"s";
+  if(s<3600) return Math.round(s/60)+"m";
+  if(s<86400) return Math.round(s/3600)+"h";
+  return Math.round(s/86400)+"d";
+}
+function upsert(mmsi){
+  const s = byMMSI[mmsi], st = state[mmsi];
+  if(!s||!st||st.lat==null) return;
+  if(markers[mmsi]){
+    markers[mmsi].setLatLng([st.lat,st.lon]).setIcon(shipIcon(s.klasse, st.hdg??st.cog));
+  }else{
+    const m = L.marker([st.lat,st.lon],{icon:shipIcon(s.klasse, st.hdg??st.cog)}).addTo(map);
+    m.bindTooltip(s.name,{permanent:true,direction:'right',className:'ship-lab',offset:[9,0]});
+    markers[mmsi]=m;
+  }
+  const speed = st.sog!=null? st.sog.toFixed(1)+" kn":"—";
+  const crs = st.cog!=null? Math.round(st.cog)+"°":"—";
+  markers[mmsi].bindPopup(
+    `<div class="pop"><b>${s.fl} ${s.name}</b> <span class="g">${s.klasse}-klasse</span><br>
+     <table>
+       <tr><td>Snelheid</td><td>${speed}</td></tr>
+       <tr><td>Koers</td><td>${crs}</td></tr>
+       <tr><td>MMSI</td><td>${s.mmsi}</td></tr>
+       ${s.cs?`<tr><td>Callsign</td><td>${s.cs}</td></tr>`:``}
+       <tr><td>Update</td><td>${fmtAgo(st.t)} geleden${st.src==='live'?' · live':''}</td></tr>
+     </table></div>`);
+}
+
+// ---- sidebar ----
+const listEl = document.getElementById('list');
+function renderList(){
+  const rows = SHIPS.slice().sort((a,b)=>{
+    const la=state[a.mmsi]&&state[a.mmsi].lat!=null, lb=state[b.mmsi]&&state[b.mmsi].lat!=null;
+    if(la!==lb) return la?-1:1;
+    return a.name.localeCompare(b.name);
+  });
+  let live=0;
+  listEl.innerHTML = rows.map(s=>{
+    const st=state[s.mmsi]; const has=st&&st.lat!=null; if(has)live++;
+    const fresh = has && (Date.now()-st.t)<30*60*1000;
+    const col = !has?"var(--off)":(fresh?"var(--live)":"var(--stale)");
+    const detail = has?`${st.sog!=null?st.sog.toFixed(1)+' kn':''} · ${fmtAgo(st.t)}`:'geen signaal';
+    return `<div class="row" data-m="${s.mmsi}">
+      <div class="cls" style="background:${CLSCOL[s.klasse]}">${s.klasse}</div>
+      <div class="nm"><div class="n">${s.fl} ${s.name}</div><div class="m">MMSI ${s.mmsi}</div></div>
+      <div class="st">${detail}<span class="sd" style="background:${col}"></span></div>
+    </div>`;
+  }).join('');
+  document.getElementById('liveN').textContent=live;
+  document.getElementById('totN').textContent=SHIPS.length;
+  listEl.querySelectorAll('.row').forEach(r=>r.onclick=()=>{
+    const m=r.dataset.m, st=state[m];
+    if(st&&st.lat!=null){ map.setView([st.lat,st.lon],9,{animate:true}); markers[m]&&markers[m].openPopup(); }
+  });
+}
+
+// ---- load fleet + stored positions ----
+async function loadFleet(){
+  const r = await fetch('ships.json',{cache:'no-store'});
+  const j = await r.json();
+  SHIPS = j.ships.map(s=>({...s, mmsi:String(s.mmsi), fl:FLAG[s.land]||'', cs:s.callsign}));
+  byMMSI = Object.fromEntries(SHIPS.map(s=>[s.mmsi,s]));
+}
+async function loadPositions(){
+  try{
+    const r = await fetch('positions.json?_='+Date.now(),{cache:'no-store'});
+    const j = await r.json();
+    const p = j.positions||{};
+    for(const mmsi in p){
+      if(!byMMSI[mmsi]) continue;
+      const st = state[mmsi]||(state[mmsi]={});
+      if(st.src==='live') continue; // don't overwrite a fresher live fix
+      const d=p[mmsi];
+      st.lat=d.lat; st.lon=d.lon; st.sog=d.sog; st.cog=d.cog; st.hdg=d.hdg;
+      st.t=d.t?new Date(d.t).getTime():Date.now(); st.src='stored';
+      upsert(mmsi);
+    }
+    const ageEl=document.getElementById('age');
+    if(j.generatedAt) ageEl.textContent='bijgewerkt '+fmtAgo(new Date(j.generatedAt).getTime())+' geleden';
+  }catch(e){ /* positions.json may not exist yet */ }
+  renderList();
+}
+
+// ---- optional: live stream with own key ----
+let ws=null, wantOpen=false;
+const cdot=document.getElementById('cdot'), cstate=document.getElementById('cstate');
+function setConn(s,label){ cdot.style.background = s==='on'?'var(--live)':s==='wait'?'var(--stale)':'var(--off)'; cstate.textContent=label; }
+function connect(){
+  const key=document.getElementById('key').value.trim();
+  if(!key){ alert("Vul je aisstream.io API-sleutel in (gratis account op aisstream.io)."); return; }
+  localStorage.setItem('ais_key',key);
+  wantOpen=true;
+  if(ws){ try{ws.close();}catch(e){} }
+  setConn('wait','live verbinden…');
+  ws=new WebSocket('wss://stream.aisstream.io/v0/stream');
+  ws.onopen=()=>{
+    setConn('on','live');
+    ws.send(JSON.stringify({
+      APIKey:key,
+      BoundingBoxes:[[[40.0,-15.0],[71.0,31.0]]],
+      FiltersShipMMSI: SHIPS.map(s=>s.mmsi),
+      FilterMessageTypes:["PositionReport","StandardClassBPositionReport","ExtendedClassBPositionReport","ShipStaticData"]
+    }));
+  };
+  ws.onmessage=(ev)=>{
+    let d; try{ d=JSON.parse(ev.data);}catch(e){return;}
+    if(d.error){ setConn('off','fout: '+d.error); return; }
+    const md=d.MetaData||{}; const mmsi=String(md.MMSI||md.MMSI_String||'');
+    if(!byMMSI[mmsi]) return;
+    const st = state[mmsi]||(state[mmsi]={});
+    if(md.latitude!=null){ st.lat=md.latitude; st.lon=md.longitude; }
+    const msg=d.Message||{};
+    const pr=msg.PositionReport||msg.StandardClassBPositionReport||msg.ExtendedClassBPositionReport;
+    if(pr){
+      if(pr.Latitude!=null){ st.lat=pr.Latitude; st.lon=pr.Longitude; }
+      if(pr.Sog!=null&&pr.Sog<102.3) st.sog=pr.Sog;
+      if(pr.Cog!=null&&pr.Cog<360) st.cog=pr.Cog;
+      if(pr.TrueHeading!=null&&pr.TrueHeading<360) st.hdg=pr.TrueHeading;
+    }
+    if(st.lat==null) return;
+    st.t=Date.now(); st.src='live';
+    upsert(mmsi);
+  };
+  ws.onclose=()=>{ setConn('off','live gesloten'); if(wantOpen) setTimeout(()=>{ if(wantOpen)connect(); },5000); };
+  ws.onerror=()=>{ setConn('off','verbindingsfout'); };
+}
+document.getElementById('connect').onclick=connect;
+document.getElementById('key').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
+const saved=localStorage.getItem('ais_key'); if(saved){ document.getElementById('key').value=saved; document.getElementById('live').open=true; }
+
+// ---- boot ----
+(async ()=>{
+  await loadFleet();
+  renderList();
+  await loadPositions();
+  setInterval(loadPositions, 60000);  // re-fetch stored positions each minute
+  setInterval(renderList, 10000);     // keep "x min ago" fresh
+})();
+</script>
+</body>
+</html>

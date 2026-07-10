@@ -1,0 +1,13 @@
+{
+  "name": "tallships-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Collects AIS positions from aisstream.io into positions.json",
+  "scripts": {
+    "collect": "node collect.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
