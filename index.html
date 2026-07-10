@@ -22,18 +22,10 @@
   header .sub{margin-top:3px;font-size:11px;color:var(--mut)}
   #toggle{position:absolute;top:11px;right:12px;width:30px;height:30px;padding:0;border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:7px;font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
   #toggle:hover{background:var(--line)}
-  #side.collapsed #list,#side.collapsed #live,#side.collapsed footer{display:none}
+  #side.collapsed #list,#side.collapsed footer{display:none}
   #status{display:flex;gap:12px;padding:10px 16px;font-size:11px;color:var(--mut);border-bottom:1px solid var(--line);flex-wrap:wrap}
   #status b{color:var(--ink)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
-  details#live{border-bottom:1px solid var(--line)}
-  details#live summary{padding:9px 16px;font-size:11px;color:var(--mut);cursor:pointer;list-style:none}
-  details#live summary::-webkit-details-marker{display:none}
-  details#live summary::before{content:"▸ ";color:var(--accent)}
-  details#live[open] summary::before{content:"▾ "}
-  #keybar{padding:0 16px 12px;display:flex;gap:6px}
-  #keybar input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:7px 9px;font-size:12px}
-  #keybar button{background:var(--accent);border:0;color:#04222b;font-weight:600;border-radius:6px;padding:7px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
   #list{flex:1;overflow-y:auto}
   .row{display:flex;align-items:center;gap:9px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer}
   .row:hover{background:var(--panel2)}
@@ -61,7 +53,7 @@
     #map{position:absolute;inset:0;width:100%;height:100%}
     #side{position:absolute;left:0;right:0;bottom:0;width:100%;flex-basis:auto;height:50%;z-index:1000;border-right:0;border-top:1px solid var(--line);box-shadow:0 -6px 24px rgba(0,0,0,.45)}
     #side.collapsed{height:auto}
-    #status,footer,details#live{display:none}
+    #status,footer{display:none}
   }
 </style>
 </head>
@@ -79,13 +71,6 @@
       <span><b id="totN">0</b> vloot</span>
       <span id="age"></span>
     </div>
-    <details id="live">
-      <summary>Live meevolgen met je eigen aisstream-sleutel</summary>
-      <div id="keybar">
-        <input id="key" type="text" placeholder="aisstream.io API-sleutel" autocomplete="off">
-        <button id="connect">Verbind</button>
-      </div>
-    </details>
     <div id="list"></div>
     <footer>
       Posities via <a href="https://aisstream.io" target="_blank">aisstream.io</a> (gratis AIS, enkel walontvangers). Schepen zonder AIS of buiten bereik verschijnen niet. Bron vloot: <a href="https://tallships.antwerpen.be" target="_blank">tallships.antwerpen.be</a>.
@@ -98,10 +83,9 @@
 <script>
 // Embedded aisstream key: the page auto-connects the live stream for every visitor.
 // Free, rate-limited, rotatable. Swap for your own if you fork.
-const LIVE_KEY = '53efdfae0478668bf02952f855f8ccd7ea642031';
-const TD = new TextDecoder();  // aisstream sends binary frames; decode before JSON.parse
-// When set, the page uses the global collector service (fresh last-known for everyone,
-// no key in the browser). Leave empty to fall back to a per-browser aisstream connection.
+// The page reads positions from the always-on collector service (one shared aisstream
+// connection, fresh global snapshot, no key in the browser). Set this to your deployed
+// collector URL. Empty = just show the static positions.json seed (no live updates).
 const COLLECTOR_URL = '';
 const USING_COLLECTOR = !!COLLECTOR_URL;
 const POS_URL = USING_COLLECTOR ? COLLECTOR_URL.replace(/\/+$/,'')+'/positions.json' : 'positions.json';
@@ -277,53 +261,9 @@ async function loadPositions(){
   renderList();
 }
 
-// ---- optional: live stream with own key ----
-let ws=null, wantOpen=false;
+// ---- connection status ----
 const cdot=document.getElementById('cdot'), cstate=document.getElementById('cstate');
 function setConn(s,label){ cdot.style.background = s==='on'?'var(--live)':s==='wait'?'var(--stale)':'var(--off)'; cstate.textContent=label; }
-function connect(){
-  const key=document.getElementById('key').value.trim();
-  if(!key){ alert("Vul je aisstream.io API-sleutel in (gratis account op aisstream.io)."); return; }
-  localStorage.setItem('ais_key',key);
-  wantOpen=true;
-  if(ws){ try{ws.close();}catch(e){} }
-  setConn('wait','live verbinden…');
-  ws=new WebSocket('wss://stream.aisstream.io/v0/stream');
-  ws.binaryType='arraybuffer';
-  ws.onopen=()=>{
-    setConn('on','live');
-    ws.send(JSON.stringify({
-      APIKey:key,
-      BoundingBoxes:[[[40.0,-15.0],[71.0,31.0]]],
-      FiltersShipMMSI: SHIPS.map(s=>s.mmsi),
-      FilterMessageTypes:["PositionReport","StandardClassBPositionReport","ExtendedClassBPositionReport","ShipStaticData"]
-    }));
-  };
-  ws.onmessage=(ev)=>{
-    let d; try{ d=JSON.parse(typeof ev.data==='string'?ev.data:TD.decode(ev.data));}catch(e){return;}
-    if(d.error){ setConn('off','fout: '+d.error); return; }
-    const md=d.MetaData||{}; const mmsi=String(md.MMSI||md.MMSI_String||'');
-    if(!byMMSI[mmsi]) return;
-    const st = state[mmsi]||(state[mmsi]={});
-    if(md.latitude!=null){ st.lat=md.latitude; st.lon=md.longitude; }
-    const msg=d.Message||{};
-    const pr=msg.PositionReport||msg.StandardClassBPositionReport||msg.ExtendedClassBPositionReport;
-    if(pr){
-      if(pr.Latitude!=null){ st.lat=pr.Latitude; st.lon=pr.Longitude; }
-      if(pr.Sog!=null&&pr.Sog<102.3) st.sog=pr.Sog;
-      if(pr.Cog!=null&&pr.Cog<360) st.cog=pr.Cog;
-      if(pr.TrueHeading!=null&&pr.TrueHeading<360) st.hdg=pr.TrueHeading;
-    }
-    if(st.lat==null) return;
-    st.t=Date.now(); st.src='live';
-    upsert(mmsi);
-  };
-  ws.onclose=()=>{ setConn('off','live gesloten'); if(wantOpen) setTimeout(()=>{ if(wantOpen)connect(); },5000); };
-  ws.onerror=()=>{ setConn('off','verbindingsfout'); };
-}
-document.getElementById('connect').onclick=connect;
-document.getElementById('key').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
-const saved=localStorage.getItem('ais_key'); if(saved){ document.getElementById('key').value=saved; }
 
 // Collapse / expand the fleet panel (title-bar button, works in the mobile layout).
 const sideEl=document.getElementById('side'), toggleBtn=document.getElementById('toggle');
@@ -338,13 +278,7 @@ syncToggle();
   await loadPositions();
   setInterval(loadPositions, USING_COLLECTOR ? 10000 : 60000);
   setInterval(renderList, 10000);     // keep "x min ago" fresh
-  if(USING_COLLECTOR){
-    setConn('on','live');  // the collector is the shared live source; poll it every 10s
-  }else{
-    // No collector configured: fall back to a per-browser aisstream connection.
-    const liveKey = localStorage.getItem('ais_key') || LIVE_KEY;
-    if(liveKey){ document.getElementById('key').value = liveKey; connect(); }
-  }
+  setConn(USING_COLLECTOR ? 'on' : 'off', USING_COLLECTOR ? 'live' : 'opgeslagen posities');
 })();
 </script>
 </body>
