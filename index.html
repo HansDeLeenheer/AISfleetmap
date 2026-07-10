@@ -86,7 +86,7 @@
 // The page reads positions from the always-on collector service (one shared aisstream
 // connection, fresh global snapshot, no key in the browser). Set this to your deployed
 // collector URL. Empty = just show the static positions.json seed (no live updates).
-const COLLECTOR_URL = '';
+const COLLECTOR_URL = 'https://aisfleetmap-9hnpn.ondigitalocean.app';
 const USING_COLLECTOR = !!COLLECTOR_URL;
 const POS_URL = USING_COLLECTOR ? COLLECTOR_URL.replace(/\/+$/,'')+'/positions.json' : 'positions.json';
 const CLSCOL = {A:"#e0552b",B:"#3a86ff",C:"#8b5cf6",D:"#2dd4bf"};
