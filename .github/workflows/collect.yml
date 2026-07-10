@@ -2,7 +2,7 @@ name: Collect AIS positions
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every ~10 min (GitHub's cron floor; may lag under load)
+    - cron: '*/1 * * * *'   # every ~10 min (GitHub's cron floor; may lag under load)
   workflow_dispatch: {}       # manual "Run workflow" button
 
 # Let the run commit positions.json back to the repo.
