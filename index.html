@@ -48,10 +48,14 @@
   .ship-marker .hull{filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
   .leaflet-tooltip.ship-lab{background:rgba(9,20,32,.82);border:0;color:#dff;font-size:11px;font-weight:600;box-shadow:none;padding:1px 5px}
   .leaflet-tooltip.ship-lab::before{display:none}
+  .pop{max-width:240px}
   .pop b{font-size:13px}
   .pop .g{color:#456;font-size:11px}
+  .pop .desc{margin:5px 0 2px;font-size:11.5px;line-height:1.45;color:#2a3742}
   .pop table{font-size:11px;margin-top:4px;border-collapse:collapse}
   .pop td{padding:1px 8px 1px 0}
+  .pop .site{display:inline-block;margin-top:6px;font-size:11.5px;font-weight:600;color:#0a6ebd;text-decoration:none}
+  .pop .site:hover{text-decoration:underline}
   @media(max-width:720px){
     #app{flex-direction:column}
     #map{position:absolute;inset:0;width:100%;height:100%}
@@ -92,6 +96,10 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// Embedded aisstream key: the page auto-connects the live stream for every visitor.
+// Free, rate-limited, rotatable. Swap for your own if you fork.
+const LIVE_KEY = '53efdfae0478668bf02952f855f8ccd7ea642031';
+const TD = new TextDecoder();  // aisstream sends binary frames; decode before JSON.parse
 const CLSCOL = {A:"#e0552b",B:"#3a86ff",C:"#8b5cf6",D:"#2dd4bf"};
 const FLAG = {
   "Noorwegen":"🇳🇴","Duitsland":"🇩🇪","Polen":"🇵🇱","Denemarken":"🇩🇰","Nederland":"🇳🇱",
@@ -104,16 +112,32 @@ const state   = {};   // mmsi -> {lat,lon,sog,cog,hdg,t,src}
 
 // ---- map ----
 const map = L.map('map',{zoomControl:true,worldCopyJump:true}).setView([52.5,3.5],6);
-// Nautical base: Esri World Ocean (bathymetry + blue seas) + labels + OpenSeaMap seamarks.
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',{
-  attribution:'Esri, GEBCO, NOAA', maxZoom:19, maxNativeZoom:13
-}).addTo(map);
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',{
-  maxZoom:19, maxNativeZoom:13
-}).addTo(map);
-L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{
-  attribution:'© OpenSeaMap', maxZoom:19, opacity:0.9
-}).addTo(map);
+// Seamarks (buoys/beacons) live in their own pane so they always stay above the base.
+map.createPane('seamark'); map.getPane('seamark').style.zIndex = 350;
+L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',
+  {pane:'seamark', maxZoom:19, opacity:0.9, attribution:'© OpenSeaMap'}).addTo(map);
+
+// Two bases: Esri Ocean chart (bathymetry) for the overview, CARTO Voyager (crisp
+// harbour/street detail) once you zoom in. Swap on zoom so it's never grainy.
+const oceanBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+  {maxZoom:19, maxNativeZoom:13, attribution:'Esri, GEBCO, NOAA'});
+const oceanRef  = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
+  {maxZoom:19, maxNativeZoom:13});
+const detailBase = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+  {maxZoom:20, subdomains:'abcd', attribution:'&copy; OpenStreetMap &copy; CARTO'});
+
+const DETAIL_FROM = 13;
+function pickBase(){
+  if(map.getZoom() >= DETAIL_FROM){
+    if(map.hasLayer(oceanBase)){ map.removeLayer(oceanBase); map.removeLayer(oceanRef); }
+    if(!map.hasLayer(detailBase)) detailBase.addTo(map);
+  }else{
+    if(map.hasLayer(detailBase)) map.removeLayer(detailBase);
+    if(!map.hasLayer(oceanBase)){ oceanBase.addTo(map); oceanRef.addTo(map); }
+  }
+}
+map.on('zoomend', pickBase);
+pickBase();
 L.circleMarker([51.229,4.405],{radius:5,color:"#41c7c7",fillColor:"#41c7c7",fillOpacity:1})
   .addTo(map).bindTooltip("Antwerpen");
 
@@ -164,14 +188,17 @@ function upsert(mmsi){
   const speed = st.sog!=null? st.sog.toFixed(1)+" kn":"—";
   const crs = st.cog!=null? Math.round(st.cog)+"°":"—";
   markers[mmsi].bindPopup(
-    `<div class="pop"><b>${s.fl} ${s.name}</b> <span class="g">${s.klasse}-klasse</span><br>
+    `<div class="pop"><b>${s.fl} ${s.name}</b> <span class="g">${s.klasse}-klasse</span>
+     ${s.description?`<div class="desc">${s.description}</div>`:``}
      <table>
        <tr><td>Snelheid</td><td>${speed}</td></tr>
        <tr><td>Koers</td><td>${crs}</td></tr>
        <tr><td>MMSI</td><td>${s.mmsi}</td></tr>
        ${s.cs?`<tr><td>Callsign</td><td>${s.cs}</td></tr>`:``}
        <tr><td>Update</td><td>${fmtAgo(st.t)} geleden${st.src==='live'?' · live':''}</td></tr>
-     </table></div>`);
+     </table>
+     ${s.website?`<a class="site" href="${s.website}" target="_blank" rel="noopener">Website ↗</a>`:``}
+     </div>`);
 }
 
 // ---- sidebar ----
@@ -200,7 +227,15 @@ function renderList(){
     const m=r.dataset.m, st=state[m];
     if(st&&st.lat!=null){
       userMoved=true;
-      withProg(()=>map.setView([st.lat,st.lon],12,{animate:true}));
+      const mobile = window.matchMedia('(max-width:720px)').matches;
+      const ll = L.latLng(st.lat, st.lon);
+      // fitBounds on a single point = padded setView, so the ship lands above the
+      // bottom sheet (mobile) with room for its popup at the top.
+      withProg(()=>map.fitBounds(L.latLngBounds(ll, ll), {
+        maxZoom: 15,
+        paddingTopLeft: [30, mobile?90:60],
+        paddingBottomRight: [30, mobile? Math.round(window.innerHeight*0.5)+30 : 40]
+      }));
       markers[m]&&markers[m].openPopup();
     }
   });
@@ -246,6 +281,7 @@ function connect(){
   if(ws){ try{ws.close();}catch(e){} }
   setConn('wait','live verbinden…');
   ws=new WebSocket('wss://stream.aisstream.io/v0/stream');
+  ws.binaryType='arraybuffer';
   ws.onopen=()=>{
     setConn('on','live');
     ws.send(JSON.stringify({
@@ -256,7 +292,7 @@ function connect(){
     }));
   };
   ws.onmessage=(ev)=>{
-    let d; try{ d=JSON.parse(ev.data);}catch(e){return;}
+    let d; try{ d=JSON.parse(typeof ev.data==='string'?ev.data:TD.decode(ev.data));}catch(e){return;}
     if(d.error){ setConn('off','fout: '+d.error); return; }
     const md=d.MetaData||{}; const mmsi=String(md.MMSI||md.MMSI_String||'');
     if(!byMMSI[mmsi]) return;
@@ -279,7 +315,7 @@ function connect(){
 }
 document.getElementById('connect').onclick=connect;
 document.getElementById('key').addEventListener('keydown',e=>{if(e.key==='Enter')connect();});
-const saved=localStorage.getItem('ais_key'); if(saved){ document.getElementById('key').value=saved; document.getElementById('live').open=true; }
+const saved=localStorage.getItem('ais_key'); if(saved){ document.getElementById('key').value=saved; }
 
 // Collapse / expand the fleet panel (title-bar button, works in the mobile layout).
 const sideEl=document.getElementById('side'), toggleBtn=document.getElementById('toggle');
@@ -294,6 +330,9 @@ syncToggle();
   await loadPositions();
   setInterval(loadPositions, 60000);  // re-fetch stored positions each minute
   setInterval(renderList, 10000);     // keep "x min ago" fresh
+  // Auto-connect the live AIS stream (embedded key, or a saved override).
+  const liveKey = localStorage.getItem('ais_key') || LIVE_KEY;
+  if(liveKey){ document.getElementById('key').value = liveKey; connect(); }
 })();
 </script>
 </body>
