@@ -1,0 +1,14 @@
+{
+  "name": "aisfleetmap-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Always-on AIS collector serving a global last-known snapshot for the fleet map",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node collector-service.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

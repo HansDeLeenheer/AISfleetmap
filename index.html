@@ -100,6 +100,11 @@
 // Free, rate-limited, rotatable. Swap for your own if you fork.
 const LIVE_KEY = '53efdfae0478668bf02952f855f8ccd7ea642031';
 const TD = new TextDecoder();  // aisstream sends binary frames; decode before JSON.parse
+// When set, the page uses the global collector service (fresh last-known for everyone,
+// no key in the browser). Leave empty to fall back to a per-browser aisstream connection.
+const COLLECTOR_URL = '';
+const USING_COLLECTOR = !!COLLECTOR_URL;
+const POS_URL = USING_COLLECTOR ? COLLECTOR_URL.replace(/\/+$/,'')+'/positions.json' : 'positions.json';
 const CLSCOL = {A:"#e0552b",B:"#3a86ff",C:"#8b5cf6",D:"#2dd4bf"};
 const FLAG = {
   "Noorwegen":"🇳🇴","Duitsland":"🇩🇪","Polen":"🇵🇱","Denemarken":"🇩🇰","Nederland":"🇳🇱",
@@ -250,7 +255,7 @@ async function loadFleet(){
 }
 async function loadPositions(){
   try{
-    const r = await fetch('positions.json?_='+Date.now(),{cache:'no-store'});
+    const r = await fetch(POS_URL+'?_='+Date.now(),{cache:'no-store'});
     const j = await r.json();
     const p = j.positions||{};
     const SEED_MAX_AGE = 30*60*1000; // don't show a stored fix older than this as "current"
@@ -331,11 +336,15 @@ syncToggle();
   await loadFleet();
   renderList();
   await loadPositions();
-  setInterval(loadPositions, 60000);  // re-fetch stored positions each minute
+  setInterval(loadPositions, USING_COLLECTOR ? 10000 : 60000);
   setInterval(renderList, 10000);     // keep "x min ago" fresh
-  // Auto-connect the live AIS stream (embedded key, or a saved override).
-  const liveKey = localStorage.getItem('ais_key') || LIVE_KEY;
-  if(liveKey){ document.getElementById('key').value = liveKey; connect(); }
+  if(USING_COLLECTOR){
+    setConn('on','live');  // the collector is the shared live source; poll it every 10s
+  }else{
+    // No collector configured: fall back to a per-browser aisstream connection.
+    const liveKey = localStorage.getItem('ais_key') || LIVE_KEY;
+    if(liveKey){ document.getElementById('key').value = liveKey; connect(); }
+  }
 })();
 </script>
 </body>

@@ -46,11 +46,34 @@ Your map is then live at `https://<user>.github.io/<repo>/`.
 > Scheduled Actions run at most every ~10 minutes and GitHub can delay them under load,
 > so positions refresh on that cadence, not in real time.
 
-## Live mode (optional)
+## Live map: always-on collector (recommended)
 
-The page has a collapsible "Live meevolgen" panel where anyone can paste their **own**
-aisstream key to stream real-time updates directly in their browser, layered on top of the
-stored positions. That key stays in their browser (localStorage), never leaves it.
+The GitHub Action seed only refreshes on a schedule (and GitHub throttles short crons hard).
+For a genuinely live, global map, run the small always-on collector in `server/`. It holds a
+single aisstream connection for everyone, keeps each ship's last-known position in memory, and
+serves it over HTTP. The page then reads from it, no key in the browser, one upstream
+connection no matter how many people watch (aisstream's free tier limits concurrent
+connections per key, so per-browser streaming does not scale).
+
+Deploy on DigitalOcean App Platform (spec in `.do/app.yaml`):
+
+1. DO console → Apps → Create App → this GitHub repo → it picks up `.do/app.yaml`
+   (or `doctl apps create --spec .do/app.yaml`).
+2. Add the secret `AISSTREAM_API_KEY` (Settings → collector → Environment Variables).
+3. Deploy. You get an HTTPS URL like `https://aisfleetmap-collector-xxxx.ondigitalocean.app`.
+4. Put that URL in `index.html` → `const COLLECTOR_URL = '...'` and push. The page then
+   polls `<url>/positions.json` every 10s for the global live snapshot.
+
+Endpoints: `/positions.json` (snapshot), `/health`, `/` (status). Runs anywhere Node runs
+(a Droplet, Fly.io, etc.); App Platform just gives HTTPS for free.
+
+Local run: `cd server && npm install && AISSTREAM_API_KEY=xxxxx node collector-service.mjs`
+
+## Per-browser live (fallback)
+
+When `COLLECTOR_URL` is empty, the page falls back to a per-browser aisstream connection
+using the key embedded in `index.html` (or one a visitor pastes into the "Live meevolgen"
+panel, which stays in their browser). Fine for a single viewer; use the collector for real use.
 
 ## Local development
 

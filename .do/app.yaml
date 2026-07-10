@@ -1,0 +1,26 @@
+# DigitalOcean App Platform spec for the always-on AIS collector.
+# Create the app from this: DO console -> Apps -> Create -> from this repo,
+# or: doctl apps create --spec .do/app.yaml
+# Then set the AISSTREAM_API_KEY secret (console: Settings -> collector -> Environment Variables).
+name: aisfleetmap-collector
+region: ams
+services:
+  - name: collector
+    github:
+      repo: HansDeLeenheer/AISfleetmap
+      branch: main
+      deploy_on_push: true
+    source_dir: /server
+    run_command: npm start
+    environment_slug: node-js
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    http_port: 8080
+    health_check:
+      http_path: /health
+    envs:
+      - key: AISSTREAM_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+    routes:
+      - path: /
