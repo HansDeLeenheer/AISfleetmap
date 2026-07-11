@@ -42,6 +42,12 @@ GitHub Pages serves the static index.html + ships.json
 Fork the repo and edit `ships.json`. Each ship needs at least `name` and `mmsi` (look MMSIs up
 on vesselfinder.com / marinetraffic.com, matching on name + country + type).
 
+Set `"active": false` on a ship's entry to hide it from the map without losing tracking (default
+is active). It stays subscribed and its history is still recorded, but it's excluded from the
+collector's `/positions.json` and from the page's list, so e.g. a ship no longer attending can't
+drag the map to a far-away position when it powers on its AIS. Toggling it takes effect on the
+served snapshot after a collector redeploy; the page picks it up on reload.
+
 ### 2. Deploy the collector (the live source)
 On **DigitalOcean App Platform** (spec: `.do/app.yaml`):
 

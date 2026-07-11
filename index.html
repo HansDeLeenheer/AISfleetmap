@@ -234,7 +234,8 @@ function renderList(){
 async function loadFleet(){
   const r = await fetch('ships.json',{cache:'no-store'});
   const j = await r.json();
-  SHIPS = j.ships.map(s=>({...s, mmsi:String(s.mmsi), fl:FLAG[s.land]||'', cs:s.callsign}));
+  // active:false ships are hidden from the map/list (still tracked server-side).
+  SHIPS = j.ships.filter(s=>s.active!==false).map(s=>({...s, mmsi:String(s.mmsi), fl:FLAG[s.land]||'', cs:s.callsign}));
   byMMSI = Object.fromEntries(SHIPS.map(s=>[s.mmsi,s]));
 }
 async function loadPositions(){

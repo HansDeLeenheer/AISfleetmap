@@ -28,8 +28,11 @@ try {
   const r = await fetch('https://hansdeleenheer.github.io/AISfleetmap/ships.json');
   fleet = await r.json();
 }
-const mmsis = fleet.ships.map(s => String(s.mmsi)).filter(Boolean);
+const mmsis = fleet.ships.map(s => String(s.mmsi)).filter(Boolean);   // ALL ships are tracked
 const nameByMMSI = Object.fromEntries(fleet.ships.map(s => [String(s.mmsi), s.name]));
+// Ships with active:false are still tracked + recorded, but not served in /positions.json
+// (e.g. a ship no longer coming, so it can't drag the map to a far-away position).
+const activeSet = new Set(fleet.ships.filter(s => s.active !== false).map(s => String(s.mmsi)));
 
 const store = { generatedAt: null, positions: {} };
 
@@ -128,7 +131,9 @@ const server = http.createServer((req, res) => {
   if (url === '/positions.json' || url === '/positions') {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
-    res.end(JSON.stringify(store));
+    const positions = {};
+    for (const m in store.positions) if (activeSet.has(m)) positions[m] = store.positions[m];
+    res.end(JSON.stringify({ generatedAt: store.generatedAt, positions }));
   } else if (url === '/track') {
     // History for one ship (requires MONGODB_URI). Usage: /track?mmsi=211205920
     const mmsi = new URL(req.url, 'http://x').searchParams.get('mmsi');
@@ -143,9 +148,10 @@ const server = http.createServer((req, res) => {
   } else {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      service: 'aisfleetmap-collector', tracking: mmsis.length,
-      located: Object.keys(store.positions).length, generatedAt: store.generatedAt,
-      persistence: positionsCol ? 'mongodb' : 'in-memory',
+      service: 'aisfleetmap-collector', tracking: mmsis.length, active: activeSet.size,
+      located: Object.keys(store.positions).length,
+      served: Object.keys(store.positions).filter(m => activeSet.has(m)).length,
+      generatedAt: store.generatedAt, persistence: positionsCol ? 'mongodb' : 'in-memory',
     }));
   }
 });
