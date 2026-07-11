@@ -62,16 +62,30 @@ for free. Endpoints: `/positions.json` (snapshot), `/health`, `/` (status).
 
 ### Optional: persistence + history (MongoDB)
 By default the collector is in-memory: fast, but a restart resets the last-known store and there's
-no history. To make it durable and record every position, set one env var:
+no history. Set `MONGODB_URI` to make it durable and record every position. It's fully opt-in, so
+forks that just want a live map need nothing.
 
-- **`MONGODB_URI`** (encrypted) → the collector seeds the in-memory store from the DB on startup
-  (so a restart comes back full), upserts each ship's last-known into a `positions` collection,
-  and appends every fix to a `tracks` collection. `/track?mmsi=<mmsi>` then returns that ship's
-  history. Optional `MONGODB_DB` sets the database name (default `aisfleetmap`).
+When enabled, the collector:
+- seeds the in-memory store from the DB on startup, so a restart comes back **full**;
+- upserts each ship's last-known into a `positions` collection (`_id` = MMSI);
+- appends every fix to a `tracks` collection (full history);
+- serves `/track?mmsi=<mmsi>` with that ship's recorded track.
 
-Leave `MONGODB_URI` unset and the collector runs exactly as before, in-memory only. It's fully
-opt-in, so forkers who just want a live map need nothing extra. Check the service `/` endpoint:
-`"persistence":"mongodb"` vs `"in-memory"` tells you which mode is active.
+`MONGODB_DB` optionally sets the database name (default `aisfleetmap`).
+
+**To enable on DigitalOcean App Platform:**
+1. **Allowlist the collector on your database first.** A managed DB (e.g. MongoDB Atlas) blocks
+   unknown IPs. Add the DigitalOcean app's dedicated IP addresses (App → Settings, the app's IPs)
+   to the DB's network-access allowlist. Compass working from your laptop does **not** mean the app
+   can connect, the app's IP differs from your laptop's. (`0.0.0.0/0` also works but is less secure.)
+2. **Add the env var:** App → the `collector` component → Settings → Environment Variables →
+   `MONGODB_URI` = your connection string, tick **Encrypt**. Optionally add `MONGODB_DB`.
+3. **Deploy** the service manually (autodeploy should be off, see the note above).
+4. **Verify** in Runtime Logs: `MongoDB connected (<db>); seeded N last-known, history enabled`.
+
+If the DB is unreachable, the collector logs `connection failed; continuing in-memory only` and
+keeps serving the live map (it never goes down over a DB problem). The `/` status endpoint reports
+`"persistence":"mongodb"` or `"in-memory"` so you can confirm which mode is active.
 
 ### 3. Enable GitHub Pages
 Repo → Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
