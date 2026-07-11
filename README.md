@@ -31,11 +31,10 @@ GitHub Pages serves the static index.html + ships.json
 |---|---|
 | `index.html` | Leaflet map. Set `COLLECTOR_URL` near the top to your deployed collector; the page polls `<url>/positions.json` every 10s. |
 | `ships.json` | The fleet: name, MMSI, class, length, country, callsign, description, website. The one data file you edit. |
-| `server/collector-service.mjs` | The always-on collector. One aisstream connection, in-memory last-known store, serves `/positions.json`, `/health`, `/`. |
-| `server/package.json` | Collector deps (`ws`). |
+| `server/collector-service.mjs` | The always-on collector. One aisstream connection, in-memory last-known store, serves `/positions.json`, `/health`, `/`, and `/track?mmsi=` (history, if a DB is configured). Optional MongoDB persistence (see below). |
+| `server/package.json` | Collector deps (`ws`, and `mongodb` for optional persistence). |
 | `.do/app.yaml` | DigitalOcean App Platform spec for the collector. |
-| `positions.json` | Optional static seed (see fallback below). Not used once `COLLECTOR_URL` is set. |
-| `collector/collect.mjs`, `.github/workflows/collect.yml` | Optional one-shot GitHub Action that writes `positions.json` on a schedule. Fallback only; the Action's cron is unreliable and is not the live source. |
+| `positions.json`, `collector/` | Legacy static seed + one-shot script. Not part of the live path; only used as a static fallback when `COLLECTOR_URL` is empty. |
 
 ## Setup
 
@@ -57,6 +56,23 @@ On **DigitalOcean App Platform** (spec: `.do/app.yaml`):
 The collector runs anywhere Node runs (a Droplet, Fly.io, etc.); App Platform just gives HTTPS
 for free. Endpoints: `/positions.json` (snapshot), `/health`, `/` (status).
 
+> On DigitalOcean, turn **off** "Autodeploy on push" for the service. The collector's store is
+> in memory, so every redeploy resets it; with autodeploy on, unrelated repo pushes would wipe it.
+> Deploy the service manually when you actually change `server/` code (or add MongoDB below).
+
+### Optional: persistence + history (MongoDB)
+By default the collector is in-memory: fast, but a restart resets the last-known store and there's
+no history. To make it durable and record every position, set one env var:
+
+- **`MONGODB_URI`** (encrypted) → the collector seeds the in-memory store from the DB on startup
+  (so a restart comes back full), upserts each ship's last-known into a `positions` collection,
+  and appends every fix to a `tracks` collection. `/track?mmsi=<mmsi>` then returns that ship's
+  history. Optional `MONGODB_DB` sets the database name (default `aisfleetmap`).
+
+Leave `MONGODB_URI` unset and the collector runs exactly as before, in-memory only. It's fully
+opt-in, so forkers who just want a live map need nothing extra. Check the service `/` endpoint:
+`"persistence":"mongodb"` vs `"in-memory"` tells you which mode is active.
+
 ### 3. Enable GitHub Pages
 Repo → Settings → Pages → Deploy from branch `main`, folder `/ (root)`.
 
@@ -65,10 +81,8 @@ In `index.html` set `const COLLECTOR_URL = 'https://<your-app>.ondigitalocean.ap
 The map is then live at `https://<user>.github.io/<repo>/`.
 
 ## Fallback: no collector
-If `COLLECTOR_URL` is empty, the page just loads the static `positions.json` (no live updates).
-You can keep that file fresh-ish with the optional GitHub Action (`.github/workflows/collect.yml`),
-but note GitHub throttles short crons hard, so treat it as a stale seed, not a live feed. For a
-real live map, run the collector.
+If `COLLECTOR_URL` is empty, the page just loads the static `positions.json` (no live updates),
+whatever was last committed to the repo. It's only a placeholder; for a live map, run the collector.
 
 ## Local development
 
@@ -83,25 +97,8 @@ AISSTREAM_API_KEY=xxxxx node collector-service.mjs   # serves http://localhost:8
 
 ## Roadmap
 
-### Persistent storage (planned next change)
-The collector keeps its last-known store **in memory only**. Any restart or redeploy (DigitalOcean
-auto-deploys on every push to `main`) clears it; it refills from the live stream within 1-2 minutes.
-There is also no position history.
-
-To fix both, persist to a database (e.g. MongoDB):
-
-- Add `MONGODB_URI` as an encrypted env var on the collector.
-- On startup, load all last-known docs into the in-memory `store.positions` before/while connecting,
-  so a restart comes back full instantly.
-- In the aisstream message handler, upsert each fix: `{ _id: mmsi, ...position, updatedAt }` into a
-  `positions` collection.
-- Keep serving `/positions.json` from the in-memory store (fast); the DB is durability + seed.
-- Optional: append each fix to a `tracks` collection to unlock history / vessel trails.
-
-All of this lives in `server/collector-service.mjs`; nothing on the page changes.
-
-### Other ideas
-- Position trails (short track behind each ship), once history is stored.
+- **Position trails** on the map: the history is already recorded in the `tracks` collection when
+  `MONGODB_URI` is set and exposed via `/track?mmsi=`; the page just needs to fetch and draw it.
 - ETA-to-destination, filter by class.
 
 ## Caveats

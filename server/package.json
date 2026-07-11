@@ -9,6 +9,7 @@
     "start": "node collector-service.mjs"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "mongodb": "^6.9.0"
   }
 }

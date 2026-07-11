@@ -22,5 +22,10 @@ services:
       - key: AISSTREAM_API_KEY
         scope: RUN_TIME
         type: SECRET
+      # Optional: set MONGODB_URI (encrypted, in the console) to enable persistent
+      # last-known + full position history. Without it the collector runs in-memory only.
+      # - key: MONGODB_URI
+      #   scope: RUN_TIME
+      #   type: SECRET
     routes:
       - path: /
