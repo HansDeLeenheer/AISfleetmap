@@ -242,16 +242,14 @@ async function loadPositions(){
     const r = await fetch(POS_URL+'?_='+Date.now(),{cache:'no-store'});
     const j = await r.json();
     const p = j.positions||{};
-    const SEED_MAX_AGE = 30*60*1000; // don't show a stored fix older than this as "current"
+    // Show every last-known position the collector holds, regardless of age. The sidebar
+    // "x min/h ago" indicator conveys staleness; this is last-known-location behaviour.
     for(const mmsi in p){
       if(!byMMSI[mmsi]) continue;
       const st = state[mmsi]||(state[mmsi]={});
-      if(st.src==='live') continue; // don't overwrite a fresher live fix
       const d=p[mmsi];
-      const t = d.t?new Date(d.t).getTime():0;
-      if(Date.now()-t > SEED_MAX_AGE) continue; // stale seed: leave as "waiting", let live fill it
       st.lat=d.lat; st.lon=d.lon; st.sog=d.sog; st.cog=d.cog; st.hdg=d.hdg;
-      st.t=t; st.src='stored';
+      st.t=d.t?new Date(d.t).getTime():Date.now(); st.src='stored';
       upsert(mmsi);
     }
     const ageEl=document.getElementById('age');
