@@ -66,6 +66,32 @@ if (MONGODB_URI) {
   console.log('No MONGODB_URI; running in-memory only (no persistence/history)');
 }
 
+// History thinning. A berthed ship keeps transmitting every 3 min, so most of `tracks` is
+// GPS jitter of a metre or two. These gates drop only that. Every gate fails OPEN (store),
+// and distance is measured from the last STORED fix, so slow drift accumulates and is
+// sampled rather than lost.
+// Deliberately no course gate: COG is GPS-derived, so at zero speed it swings wildly while
+// the ship sits still, and gating on it keeps ~all of the jitter it was meant to drop.
+const KEEP_SOG = 0.2;      // any credible way-on: store every fix, whatever the distance
+const KEEP_DIST_M = 30;    // displacement since last stored fix
+const KEEP_MAX_GAP = 15 * 60e3; // heartbeat, so a stationary ship still has history
+const lastStored = {};     // mmsi -> last fix written to `tracks`
+
+function metres(aLat, aLon, bLat, bLon) {
+  const k = 111320;
+  return Math.hypot((aLat - bLat) * k, (aLon - bLon) * k * Math.cos(aLat * Math.PI / 180));
+}
+
+// True unless this fix is indistinguishable from the last one we stored.
+function worthStoring(p, t) {
+  const prev = lastStored[p.mmsi];
+  if (!prev) return true;
+  if (p.sog == null || p.sog >= KEEP_SOG) return true;
+  if (!(t > prev.t) || t - prev.t >= KEEP_MAX_GAP) return true;
+  if (metres(p.lat, p.lon, prev.lat, prev.lon) >= KEEP_DIST_M) return true;
+  return false;
+}
+
 function persist(p) {
   if (!positionsCol) return;
   const t = new Date(p.t);
@@ -74,17 +100,22 @@ function persist(p) {
     { $set: { name: p.name, lat: p.lat, lon: p.lon, sog: p.sog, cog: p.cog, hdg: p.hdg, t, updatedAt: new Date() } },
     { upsert: true },
   ).catch(e => console.error('positions upsert:', e.message));
+  if (!worthStoring(p, t)) return;
+  lastStored[p.mmsi] = { lat: p.lat, lon: p.lon, t };
   tracksCol.insertOne(
     { mmsi: p.mmsi, name: p.name, lat: p.lat, lon: p.lon, sog: p.sog, cog: p.cog, hdg: p.hdg, t },
   ).catch(e => console.error('tracks insert:', e.message));
 }
 
 // ---- aisstream ----
-let ws, lastMsg = Date.now(), backoff = 3000;
+// Idle thresholds, escalated per consecutive starved probe. Only the first applies while
+// data is flowing; any inbound message resets to 3 min.
+const IDLE_LADDER = [180e3, 300e3, 600e3, 900e3];
+let ws, lastMsg = Date.now(), lastProbe = Date.now(), starve = 0, backoff = 3000;
 function connect() {
   ws = new WebSocket('wss://stream.aisstream.io/v0/stream');
   ws.on('open', () => {
-    backoff = 3000;
+    lastProbe = Date.now();
     ws.send(JSON.stringify({
       APIKey: KEY, BoundingBoxes: BBOX, FiltersShipMMSI: mmsis,
       FilterMessageTypes: ['PositionReport', 'StandardClassBPositionReport', 'ExtendedClassBPositionReport', 'ShipStaticData'],
@@ -93,6 +124,8 @@ function connect() {
   });
   ws.on('message', (raw) => {
     lastMsg = Date.now();
+    if (starve) { console.log(`stream recovered after ${starve} starved probes`); starve = 0; }
+    backoff = 3000;
     let d; try { d = JSON.parse(raw.toString()); } catch { return; }
     if (d.error) { console.error('aisstream error:', d.error); return; }
     const md = d.MetaData || {};
@@ -119,10 +152,19 @@ function connect() {
 }
 connect();
 
-// Watchdog: if the stream goes quiet for 3 min, force a reconnect.
+// Watchdog: force a reconnect when the stream goes quiet. Measures idle from the last
+// message OR the last probe, whichever is more recent, so a silent stream is re-probed on
+// the ladder interval instead of once per tick (aisstream outages run for days).
 setInterval(() => {
-  if (Date.now() - lastMsg > 180000) { console.log('stream idle, forcing reconnect'); try { ws.close(); } catch {} }
-}, 60000);
+  const now = Date.now();
+  const idle = Math.min(now - lastMsg, now - lastProbe);
+  const limit = IDLE_LADDER[Math.min(starve, IDLE_LADDER.length - 1)];
+  if (idle > limit) {
+    starve++; lastProbe = now;
+    console.log(`stream idle ${Math.round(idle / 1000)}s, forcing reconnect (starved probes: ${starve})`);
+    try { ws.close(); } catch {}
+  }
+}, 30000);
 
 // ---- HTTP ----
 const server = http.createServer((req, res) => {
@@ -135,13 +177,26 @@ const server = http.createServer((req, res) => {
     for (const m in store.positions) if (activeSet.has(m)) positions[m] = store.positions[m];
     res.end(JSON.stringify({ generatedAt: store.generatedAt, positions }));
   } else if (url === '/track') {
-    // History for one ship (requires MONGODB_URI). Usage: /track?mmsi=211205920
-    const mmsi = new URL(req.url, 'http://x').searchParams.get('mmsi');
+    // History for one ship (requires MONGODB_URI). Usage: /track?mmsi=211205920&days=5
+    // Sorted NEWEST-first in Mongo then reversed, so the row cap trims old history rather
+    // than the recent end. `days` counts back from the ship's own latest stored fix, not
+    // from now, so the window still resolves while the upstream feed is down.
+    const q = new URL(req.url, 'http://x').searchParams;
+    const mmsi = q.get('mmsi');
+    const days = Math.min(Math.max(parseFloat(q.get('days')) || 0, 0), 90);
+    const limit = Math.min(Math.max(parseInt(q.get('limit'), 10) || 5000, 1), 20000);
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', 'no-store');
     if (!tracksCol || !mmsi) { res.end(JSON.stringify({ mmsi: mmsi || null, track: [] })); return; }
-    tracksCol.find({ mmsi }).sort({ t: 1 }).limit(5000).project({ _id: 0, lat: 1, lon: 1, t: 1 }).toArray()
-      .then(track => res.end(JSON.stringify({ mmsi, track })))
+    tracksCol.find({ mmsi }).sort({ t: -1 }).limit(limit).project({ _id: 0, lat: 1, lon: 1, t: 1 }).toArray()
+      .then(rows => {
+        let track = rows.reverse();
+        if (days && track.length) {
+          const cutoff = new Date(track[track.length - 1].t).getTime() - days * 86400e3;
+          track = track.filter(r => new Date(r.t).getTime() >= cutoff);
+        }
+        res.end(JSON.stringify({ mmsi, track }));
+      })
       .catch(e => { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })); });
   } else if (url === '/health') {
     res.end('ok');

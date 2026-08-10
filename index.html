@@ -20,6 +20,10 @@
   header{padding:14px 16px;border-bottom:1px solid var(--line);position:relative}
   header h1{margin:0;font-size:16px;letter-spacing:.2px;padding-right:36px}
   header .sub{margin-top:3px;font-size:11px;color:var(--mut)}
+  #routes{display:inline-flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--mut);cursor:pointer;user-select:none}
+  #routes input{accent-color:var(--accent);width:13px;height:13px;margin:0;cursor:pointer}
+  #routes.busy{opacity:.55;cursor:progress}
+  #routes .n{color:var(--off)}
   #toggle{position:absolute;top:11px;right:12px;width:30px;height:30px;padding:0;border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:7px;font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
   #toggle:hover{background:var(--line)}
   #side.collapsed #list,#side.collapsed footer{display:none}
@@ -39,6 +43,8 @@
   footer a{color:var(--mut)}
   .ship-marker .hull{filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))}
   .leaflet-tooltip.ship-lab{background:rgba(9,20,32,.82);border:0;color:#dff;font-size:11px;font-weight:600;box-shadow:none;padding:1px 5px}
+  .leaflet-control-scale{margin-top:10px;margin-right:10px}
+  .leaflet-control-scale-line{background:rgba(255,255,255,.78);border-color:#3a5f80;color:#173047;font-size:10px;font-weight:600;line-height:1.3}
   .leaflet-tooltip.ship-lab::before{display:none}
   .pop{max-width:240px}
   .pop b{font-size:13px}
@@ -47,6 +53,8 @@
   .pop table{font-size:11px;margin-top:4px;border-collapse:collapse}
   .pop td{padding:1px 8px 1px 0}
   .pop .site{display:inline-block;margin-top:6px;font-size:11.5px;font-weight:600;color:#0a6ebd;text-decoration:none}
+  .pop .rtew{display:flex;align-items:center;gap:6px;margin-top:7px;padding-top:7px;border-top:1px solid #e3e9ee;font-size:11.5px;font-weight:600;color:#0a6ebd;cursor:pointer;user-select:none}
+  .pop .rtew input{accent-color:#0a6ebd;width:13px;height:13px;margin:0;cursor:pointer}
   .pop .site:hover{text-decoration:underline}
   @media(max-width:720px){
     #app{flex-direction:column}
@@ -64,6 +72,9 @@
       <button id="toggle" aria-label="Lijst tonen of verbergen">✕</button>
       <h1>⛵ Tall Ships Antwerpen 2026</h1>
       <div class="sub">Live posities · The Tall Ships Races · 11–14 juli</div>
+      <label id="routes" title="Route van de laatste 5 dagen. Dikke lijn = gevolgd via AIS, dunne lijn = geen ontvangst, geen echte vaarroute.">
+        <input type="checkbox" id="routeChk"><span>Routes · 5 dagen</span><span class="n" id="routeN"></span>
+      </label>
     </header>
     <div id="status">
       <span><span class="dot" id="cdot" style="background:var(--off)"></span><span id="cstate">opgeslagen posities</span></span>
@@ -97,6 +108,7 @@ const FLAG = {
 };
 let SHIPS = [], byMMSI = {};
 const markers = {};   // mmsi -> L.marker
+const popupHtml = {}; // mmsi -> last popup html, to avoid pointless re-renders
 const state   = {};   // mmsi -> {lat,lon,sog,cog,hdg,t,src}
 
 // ---- map ----
@@ -127,6 +139,30 @@ function pickBase(){
 }
 map.on('zoomend', pickBase);
 pickBase();
+// Scale bar. Extends Leaflet's own so the km line keeps its behaviour, and adds a nautical
+// line under it: this is a ships map and AIS range is talked about in zeemijl, not km.
+// Leaflet's _getRoundNum floors to 1, so below 1 nm the line is hidden rather than wrong.
+const ScaleNM = L.Control.Scale.extend({
+  onAdd(map){
+    // The parent onAdd calls _update() before we get to create _nScale, so the override
+    // below must tolerate it being absent, and we re-run _update once it exists.
+    const c = L.Control.Scale.prototype.onAdd.call(this, map);
+    this._nScale = L.DomUtil.create('div', 'leaflet-control-scale-line nm', c);
+    this._update();
+    return c;
+  },
+  _updateScales(maxMeters){
+    L.Control.Scale.prototype._updateScales.call(this, maxMeters);
+    if(!this._nScale || !maxMeters) return;
+    const maxNM = maxMeters/1852;
+    if(maxNM < 1){ this._nScale.style.display = 'none'; return; }
+    this._nScale.style.display = '';
+    const nm = this._getRoundNum(maxNM);
+    this._updateScale(this._nScale, nm+' zeemijl', nm/maxNM);
+  }
+});
+new ScaleNM({position:'topright', maxWidth:130, metric:true, imperial:false}).addTo(map);
+
 L.circleMarker([51.229,4.405],{radius:5,color:"#41c7c7",fillColor:"#41c7c7",fillOpacity:1})
   .addTo(map).bindTooltip("Antwerpen");
 
@@ -156,6 +192,13 @@ function shipIcon(cls, hdg){
        <path d="M11 1 L16 15 Q11 19 6 15 Z" fill="${col}" stroke="#fff" stroke-width="1.2"/></svg>`
   });
 }
+// Zoom used when you click a ship in the list: enough context to see WHERE she is, rather
+// than her berth. Tuned to ~30 km / 20 zeemijl on the scale bar. Derived from metres-per-
+// pixel so it holds at any latitude, instead of hard-coding a zoom that drifts north.
+const CTX_M_PER_PX = 376;
+function contextZoom(lat){
+  return Math.round(Math.log2(156543.03392*Math.cos(lat*Math.PI/180)/CTX_M_PER_PX));
+}
 function fmtAgo(t){
   if(!t) return "";
   const s = Math.round((Date.now()-t)/1000);
@@ -172,11 +215,14 @@ function upsert(mmsi){
   }else{
     const m = L.marker([st.lat,st.lon],{icon:shipIcon(s.klasse, st.hdg??st.cog)}).addTo(map);
     m.bindTooltip(s.name,{permanent:true,direction:'right',className:'ship-lab',offset:[9,0]});
+    // Bound once, WITH options: passing options to bindPopup again would construct a fresh
+    // Popup and drop the open one. Content is refreshed via setPopupContent below.
+    m.bindPopup('',{autoPanPadding:[25,25]});
     markers[mmsi]=m;
   }
   const speed = st.sog!=null? st.sog.toFixed(1)+" kn":"—";
   const crs = st.cog!=null? Math.round(st.cog)+"°":"—";
-  markers[mmsi].bindPopup(
+  const html =
     `<div class="pop"><b>${s.fl} ${s.name}</b> <span class="g">${s.klasse}-klasse</span>
      ${s.description?`<div class="desc">${s.description}</div>`:``}
      <table>
@@ -186,8 +232,12 @@ function upsert(mmsi){
        ${s.cs?`<tr><td>Callsign</td><td>${s.cs}</td></tr>`:``}
        <tr><td>Update</td><td>${fmtAgo(st.t)} geleden${st.src==='live'?' · live':''}</td></tr>
      </table>
+     ${USING_COLLECTOR?`<label class="rtew"><input type="checkbox" class="rte" data-m="${s.mmsi}"><span>Route · ${ROUTE_DAYS} dagen</span></label>`:``}
      ${s.website?`<a class="site" href="${s.website}" target="_blank" rel="noopener">Website ↗</a>`:``}
-     </div>`);
+     </div>`;
+  // Only push content that actually changed. Setting it re-runs Leaflet's _adjustPan, so
+  // rewriting an identical popup every 10 s was nudging the map under an open popup.
+  if(popupHtml[mmsi] !== html){ popupHtml[mmsi] = html; markers[mmsi].setPopupContent(html); }
 }
 
 // ---- sidebar ----
@@ -221,11 +271,21 @@ function renderList(){
       // fitBounds on a single point = padded setView, so the ship lands above the
       // bottom sheet (mobile) with room for its popup at the top.
       withProg(()=>map.fitBounds(L.latLngBounds(ll, ll), {
-        maxZoom: 15,
+        maxZoom: contextZoom(st.lat),
         paddingTopLeft: [30, mobile?90:60],
         paddingBottomRight: [30, mobile? Math.round(window.innerHeight*0.5)+30 : 40]
       }));
-      markers[m]&&markers[m].openPopup();
+      // Open the popup only once the map has settled. Leaflet animates a SHORT pan but jumps
+      // a long one, so opening immediately made autoPan measure against a half-finished view
+      // and pan again on top of it: a ship near others ended up off-centre, a distant one
+      // did not. moveend never fires when the view does not change, hence the fallback.
+      const mk = markers[m];
+      if(mk){
+        let done = false;
+        const open = ()=>{ if(done) return; done = true; map.off('moveend', open); mk.openPopup(); };
+        map.once('moveend', open);
+        setTimeout(open, 700);
+      }
     }
   });
 }
@@ -259,6 +319,167 @@ async function loadPositions(){
   if(!userMoved) fitFleet();
   renderList();
 }
+
+// ---- routes: per-ship tail of the last N days, coloured by class ----
+// The window is measured back from each ship's OWN newest stored fix, not from now, so the
+// tails still resolve when the upstream feed has been down for a while.
+const ROUTE_DAYS = 5;
+const ROUTE_GAP_KM = 5;               // straight-line jump longer than this = not tracked
+const ROUTE_STALE_MS = 6*3600*1000;   // history this far behind last-known = truncated, skip it
+const routeLayer = L.layerGroup().addTo(map);
+const routeCache = {};                // mmsi -> {at, track}
+const routesEl = document.getElementById('routes'),
+      routeChk = document.getElementById('routeChk'),
+      routeN   = document.getElementById('routeN');
+
+async function fetchTrack(mmsi){
+  const c = routeCache[mmsi];
+  if(c && Date.now()-c.at < 60000) return c.track;
+  const base = COLLECTOR_URL.replace(/\/+$/,'');
+  const r = await fetch(`${base}/track?mmsi=${mmsi}&days=${ROUTE_DAYS}&_=${Date.now()}`,{cache:'no-store'});
+  const j = await r.json();
+  const track = Array.isArray(j.track) ? j.track : [];
+  routeCache[mmsi] = {at:Date.now(), track};
+  return track;
+}
+
+// Windowing is done client-side too: a collector without ?days= returns the full history,
+// and we still want exactly 5 days out of it.
+function routeWindow(mmsi, track){
+  if(track.length < 2) return null;
+  const newest = new Date(track[track.length-1].t).getTime();
+  const st = state[mmsi];
+  // Guard against a truncated history (row cap): a tail ending days before the ship's
+  // last-known position would be drawn nowhere near its marker. Better to show none.
+  if(st && st.t && st.t - newest > ROUTE_STALE_MS) return null;
+  const cutoff = newest - ROUTE_DAYS*86400e3;
+  const rows = track.filter(r=>new Date(r.t).getTime() >= cutoff);
+  return rows.length >= 2 ? rows : null;
+}
+
+// Split into tracked runs and untracked jumps. The free AIS feed delivers roughly 8% of an
+// underway ship's transmissions, so a long silence means we lost her: drawing that leg at
+// full weight would claim a route she never sailed (they run straight over Jutland). A thin
+// hairline says "she came from there", without asserting the path.
+//
+// Split on DISTANCE, not elapsed time. Time thresholds cut the line wherever delivery
+// stuttered, breaking a continuously-followed leg into a dashed-looking mess, and they let a
+// fast ship cover any distance under the limit. Distance bounds the worst falsely-solid leg
+// at the threshold itself, and leaves a ship sitting in port unbroken (nothing to interpolate).
+function metres(aLat, aLon, bLat, bLon){
+  const k = 111320;
+  return Math.hypot((aLat-bLat)*k, (aLon-bLon)*k*Math.cos(aLat*Math.PI/180));
+}
+function routeSegments(rows){
+  const tracked = [], guessed = [];
+  let run = [rows[0]];
+  for(let i=1;i<rows.length;i++){
+    const km = metres(rows[i-1].lat, rows[i-1].lon, rows[i].lat, rows[i].lon)/1000;
+    if(km > ROUTE_GAP_KM){
+      if(run.length > 1) tracked.push(run);
+      guessed.push([rows[i-1], rows[i], (new Date(rows[i].t)-new Date(rows[i-1].t))/60000]);
+      run = [rows[i]];
+    }else run.push(rows[i]);
+  }
+  if(run.length > 1) tracked.push(run);
+  return {tracked, guessed};
+}
+function fmtDur(min){
+  if(min < 90) return Math.round(min)+' min';
+  if(min < 48*60) return (min/60).toFixed(1).replace('.',',')+' u';
+  return (min/1440).toFixed(1).replace('.',',')+' d';
+}
+
+// Routes are held per ship so the popup can toggle one on its own. The header box is a
+// select-all over the same set, and goes indeterminate when only some ships are shown.
+const routeOn = new Set();     // mmsi whose route is requested
+const routeLayers = {};        // mmsi -> L.LayerGroup actually on the map
+
+function buildRoute(s, track){
+  const rows = routeWindow(s.mmsi, track);
+  if(!rows) return null;
+  const col = CLSCOL[s.klasse]||"#89a";
+  const {tracked, guessed} = routeSegments(rows);
+  const g = L.layerGroup();
+  // One multi-polyline per style per ship: ~2000 separate paths across the fleet is
+  // enough to make panning stutter, and this collapses it to two layers each.
+  if(tracked.length) g.addLayer(L.polyline(tracked.map(run=>run.map(r=>[r.lat,r.lon])),
+    {color:col, weight:3.5, opacity:.9, smoothFactor:1.5, lineJoin:'round', lineCap:'round'})
+    .bindTooltip(`${s.name} · gevolgd via AIS`,{sticky:true,className:'ship-lab'}));
+  if(guessed.length){
+    const longest = guessed.reduce((a,b)=>b[2]>a[2]?b:a);
+    g.addLayer(L.polyline(guessed.map(([a,b])=>[[a.lat,a.lon],[b.lat,b.lon]]),
+      {color:col, weight:1, opacity:.55})
+      .bindTooltip(`${s.name} · geen ontvangst · ${guessed.length}×, langste ${fmtDur(longest[2])}`,
+        {sticky:true,className:'ship-lab'}));
+  }
+  g._gaps = guessed.length;
+  return g;
+}
+function hideRoute(mmsi){
+  const g = routeLayers[mmsi];
+  if(g){ routeLayer.removeLayer(g); delete routeLayers[mmsi]; }
+}
+async function showRoute(mmsi, force){
+  if(routeLayers[mmsi] && !force) return true;
+  const s = byMMSI[mmsi];
+  if(!s) return false;
+  let track;
+  try{ track = await fetchTrack(mmsi); }catch(e){ return false; }
+  if(!routeOn.has(mmsi)) return false;              // switched off while loading
+  const g = buildRoute(s, track);
+  if(!g) return false;
+  hideRoute(mmsi);                                  // swap late, so a refresh does not blink
+  routeLayers[mmsi] = g;
+  routeLayer.addLayer(g);
+  return true;
+}
+function syncRouteUI(){
+  const n = Object.keys(routeLayers).length;
+  const gaps = Object.values(routeLayers).reduce((a,g)=>a+(g._gaps||0),0);
+  const missing = routeOn.size - n;
+  routeN.textContent = routeOn.size
+    ? `· ${n} route${n===1?'':'s'} · ${gaps} onderbrekingen${missing>0?` · ${missing} onvolledig`:''}`
+    : '';
+  routeChk.checked = routeOn.size > 0;
+  routeChk.indeterminate = routeOn.size > 0 && routeOn.size < SHIPS.length;
+}
+async function syncRoutes(force){
+  routesEl.classList.add('busy');
+  for(const mmsi of Object.keys(routeLayers)) if(!routeOn.has(mmsi)) hideRoute(mmsi);
+  const queue = [...routeOn].filter(m=>force || !routeLayers[m]);
+  // Small pool: this is our own collector, one instance, so don't open 34 sockets at once.
+  await Promise.all(Array.from({length:6}, async ()=>{
+    while(queue.length) await showRoute(queue.shift(), force);
+  }));
+  syncRouteUI();
+  routesEl.classList.remove('busy');
+}
+
+// Header box = select all / clear all.
+routeChk.onchange = ()=>{
+  routeOn.clear();
+  if(routeChk.checked) SHIPS.forEach(s=>routeOn.add(s.mmsi));
+  syncRouteUI();
+  syncRoutes();
+};
+// Per-ship box inside the popup. Delegated, because popup content is re-created on open.
+document.addEventListener('change', e=>{
+  const el = e.target;
+  if(!el.matches || !el.matches('input.rte')) return;
+  const m = el.dataset.m;
+  if(el.checked) routeOn.add(m); else routeOn.delete(m);
+  syncRouteUI();
+  syncRoutes();
+});
+// The popup html is cached and shared, so the checkbox state is applied when it opens.
+map.on('popupopen', e=>{
+  const el = e.popup.getElement() && e.popup.getElement().querySelector('input.rte');
+  if(el) el.checked = routeOn.has(el.dataset.m);
+});
+// Keep tails growing while any of them is shown (cache TTL keeps this cheap).
+setInterval(()=>{ if(routeOn.size) syncRoutes(true); }, 120000);
+if(!USING_COLLECTOR){ routeChk.disabled = true; routesEl.title = 'Routes vereisen de collector'; }
 
 // ---- connection status ----
 const cdot=document.getElementById('cdot'), cstate=document.getElementById('cstate');
