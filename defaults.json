@@ -1,0 +1,32 @@
+{
+  "_comment": "Collector settings. Edit here, not in code. Read once at startup, so a change needs a collector redeploy. Any key you leave out falls back to the built-in default in server/collector-service.mjs, so a partial file is fine.",
+
+  "sources": {
+    "aisstream": {
+      "_comment": "Primary feed. One websocket, server pushes to us, no per-message cost. Key in env AISSTREAM_API_KEY.",
+      "enabled": true,
+      "bbox": [[[40.0, -15.0], [71.0, 31.0]]],
+      "idleLadderMinutes": [3, 5, 10, 15],
+      "watchdogSeconds": 30
+    },
+
+    "vesselapi": {
+      "_comment": "Secondary feed. REST, ONE CALL PER SHIP, metered. Key in env VESSELAPI_KEY. pollingMode: 'fallback' = only while aisstream is starved | 'parallel' = always, on its own interval, alongside aisstream | 'off' = never call it.",
+      "enabled": true,
+      "pollingMode": "fallback",
+      "intervalHours": 48,
+      "starvedMinutes": 60,
+      "satelliteFallback": false,
+      "activeOnly": true,
+      "monthlyCallBudget": 150,
+      "requestSpacingMs": 250
+    }
+  },
+
+  "history": {
+    "_comment": "Thinning gates for the `tracks` collection: a berthed ship transmits every 3 min and most of that is GPS jitter. Every gate fails OPEN (stores the fix).",
+    "minSogKnots": 0.2,
+    "minDistanceM": 30,
+    "maxGapMinutes": 15
+  }
+}

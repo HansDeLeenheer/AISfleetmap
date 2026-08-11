@@ -2,6 +2,8 @@
 # Create the app from this: DO console -> Apps -> Create -> from this repo,
 # or: doctl apps create --spec .do/app.yaml
 # Then set the AISSTREAM_API_KEY secret (console: Settings -> collector -> Environment Variables).
+#
+# FORKING: change `github.repo` below to your own repo, or DO will try to build from this one.
 name: aisfleetmap-collector
 region: ams
 services:
@@ -9,7 +11,9 @@ services:
     github:
       repo: HansDeLeenheer/AISfleetmap
       branch: main
-      deploy_on_push: true
+      # OFF on purpose: the collector's store is in memory, so every push would redeploy and
+      # wipe it. Deploy manually when server/ or defaults.json changes.
+      deploy_on_push: false
     source_dir: /server
     run_command: npm start
     environment_slug: node-js
@@ -25,6 +29,12 @@ services:
       # Optional: set MONGODB_URI (encrypted, in the console) to enable persistent
       # last-known + full position history. Without it the collector runs in-memory only.
       # - key: MONGODB_URI
+      #   scope: RUN_TIME
+      #   type: SECRET
+      # Optional: set VESSELAPI_KEY (encrypted, in the console) to enable the secondary AIS
+      # source used when aisstream goes dark. Behaviour is configured in ../defaults.json
+      # (sources.vesselapi). Without it the fallback is inert.
+      # - key: VESSELAPI_KEY
       #   scope: RUN_TIME
       #   type: SECRET
     routes:
